@@ -3,6 +3,7 @@ package com.imagecompare;
 import com.imagecompare.algorithm.*;
 import nu.pattern.OpenCV;
 
+import java.awt.image.BufferedImage;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -61,6 +62,33 @@ public class GlyphComparator {
             ref.release();
             cand.release();
         }
+    }
+
+    /**
+     * 比较两张内存中 {@link BufferedImage} 字形（适合从 PDF 渲染出来的字形位图，
+     * 不必落盘成临时文件）。
+     */
+    public CompareResult compare(BufferedImage reference, BufferedImage candidate, String label) {
+        ImagePreprocessor.PreprocessResult ref = preprocessor.preprocess(reference);
+        ImagePreprocessor.PreprocessResult cand = preprocessor.preprocess(candidate);
+        try {
+            return doCompare(ref, cand, label);
+        } finally {
+            ref.release();
+            cand.release();
+        }
+    }
+
+    /** 同上但直接接受预处理后的结果，外层可缓存重复 PDF 字形的预处理 */
+    public CompareResult compare(ImagePreprocessor.PreprocessResult ref,
+                                 ImagePreprocessor.PreprocessResult cand,
+                                 String label) {
+        return doCompare(ref, cand, label);
+    }
+
+    /** 暴露 preprocessor 供外部按需缓存预处理结果 */
+    public ImagePreprocessor preprocessor() {
+        return preprocessor;
     }
 
     /**
