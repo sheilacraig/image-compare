@@ -1,5 +1,6 @@
 package com.imagecompare.algorithm;
 
+import com.imagecompare.ImagePreprocessor.PreprocessResult;
 import org.opencv.core.Core;
 import org.opencv.core.Mat;
 import org.opencv.core.Rect;
@@ -7,19 +8,18 @@ import org.opencv.core.Rect;
 /**
  * 网格直方图算法
  *
- * 将图像分成 N×N 的网格，计算每个格子中前景像素的密度（比例），
- * 然后比较两张图的密度向量的相似度。
+ * 把图像分成 N×N 网格，统计每格前景密度，构成 64 维向量。
  *
- * 这种方法对笔画粗细变化有很好的容忍度：
- * - 粗笔画和细笔画在同一个网格区域内的密度值虽然不同，但差异可控
- * - 比逐像素比较（IoU）柔和得多
- * - 但不同字形的密度分布模式会有显著差异
+ * 旧版本用余弦相似度（方向化、量级不敏感、虚高），新版本用 **直方图交集 (Jaccard-style)**：
+ *   sim = Σ min(a_i, b_i) / Σ max(a_i, b_i)
+ *
+ * 直方图交集对密度量级差异敏感得多，能有效拉开"分布相似但密度不同"的字形差距。
  */
 public class GridHistogramAlgorithm implements SimilarityAlgorithm {
 
-    private static final double WEIGHT = 0.4;
+    private static final double WEIGHT = 0.15;
 
-    /** 网格大小（N×N），8×8 对 128×128 的图像是每格 16×16 像素 */
+    /** 网格大小（N×N），8×8 对 128×128 图像每格 16×16 像素 */
     private static final int GRID_SIZE = 8;
 
     @Override
@@ -28,17 +28,21 @@ public class GridHistogramAlgorithm implements SimilarityAlgorithm {
     }
 
     @Override
-    public double compare(Mat binary1, Mat binary2, Mat gray1, Mat gray2) {
-        double[] hist1 = computeGridHistogram(binary1);
-        double[] hist2 = computeGridHistogram(binary2);
+    public double compare(PreprocessResult a, PreprocessResult b) {
+        double[] h1 = computeGridHistogram(a.binary);
+        double[] h2 = computeGridHistogram(b.binary);
 
-        // 使用余弦相似度比较两个直方图向量
-        return cosineSimilarity(hist1, hist2);
+        double interSum = 0, unionSum = 0;
+        for (int i = 0; i < h1.length; i++) {
+            interSum += Math.min(h1[i], h2[i]);
+            unionSum += Math.max(h1[i], h2[i]);
+        }
+        if (unionSum < 1e-9) {
+            return 1.0; // 两张都空 → 视为完全一致
+        }
+        return interSum / unionSum;
     }
 
-    /**
-     * 计算网格密度直方图
-     */
     private double[] computeGridHistogram(Mat binary) {
         int rows = binary.rows();
         int cols = binary.cols();
@@ -61,28 +65,7 @@ public class GridHistogramAlgorithm implements SimilarityAlgorithm {
                 histogram[gy * GRID_SIZE + gx] = (double) foreground / totalPixels;
             }
         }
-
         return histogram;
-    }
-
-    /**
-     * 余弦相似度：范围 [-1, 1]，1 表示完全一致
-     */
-    private double cosineSimilarity(double[] a, double[] b) {
-        double dotProduct = 0, normA = 0, normB = 0;
-
-        for (int i = 0; i < a.length; i++) {
-            dotProduct += a[i] * b[i];
-            normA += a[i] * a[i];
-            normB += b[i] * b[i];
-        }
-
-        double denominator = Math.sqrt(normA) * Math.sqrt(normB);
-        if (denominator == 0) {
-            return (normA == 0 && normB == 0) ? 1.0 : 0.0;
-        }
-
-        return dotProduct / denominator;
     }
 
     @Override

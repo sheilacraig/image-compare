@@ -1,5 +1,6 @@
 package com.imagecompare.algorithm;
 
+import com.imagecompare.ImagePreprocessor.PreprocessResult;
 import org.opencv.core.Mat;
 import org.opencv.core.MatOfPoint;
 import org.opencv.imgproc.Imgproc;
@@ -9,13 +10,21 @@ import java.util.Comparator;
 import java.util.List;
 
 /**
- * 轮廓匹配算法
- * 使用 OpenCV 的 matchShapes() 基于 Hu 不变矩比较轮廓形状
- * 对平移、缩放、旋转具有不变性
+ * 轮廓匹配算法（多组件双向版）
+ *
+ * 改进点：
+ * 1. 不再只取最大轮廓 —— 汉字常含多个外部组件（明=日+月、林=两个木）。
+ *    取前 N 个最大轮廓，对每个去对面找"最像的"伙伴，按面积加权平均得到方向分。
+ * 2. 双向对称：A→B 和 B→A 都做，取平均，避免"小被大包含"假高分。
+ * 3. 轮廓数量差异作惩罚因子。
+ * 4. 距离 → 分数的映射用更严格的 1/(1+2d)，避免分布堆在 [0.7, 1.0]。
  */
 public class ContourMatchAlgorithm implements SimilarityAlgorithm {
 
-    private static final double WEIGHT = 0.3;
+    private static final double WEIGHT = 0.15;
+
+    /** 最多考虑前 N 个最大轮廓 */
+    private static final int TOP_N = 5;
 
     @Override
     public String name() {
@@ -23,73 +32,92 @@ public class ContourMatchAlgorithm implements SimilarityAlgorithm {
     }
 
     @Override
-    public double compare(Mat binary1, Mat binary2, Mat gray1, Mat gray2) {
-        // 使用外轮廓以避免内轮廓的排序不一致问题
-        List<MatOfPoint> contours1 = findContoursSorted(binary1);
-        List<MatOfPoint> contours2 = findContoursSorted(binary2);
+    public double compare(PreprocessResult a, PreprocessResult b) {
+        List<MatOfPoint> c1 = findContoursSorted(a.binary);
+        List<MatOfPoint> c2 = findContoursSorted(b.binary);
 
-        if (contours1.isEmpty() || contours2.isEmpty()) {
-            releaseContours(contours1);
-            releaseContours(contours2);
-            return contours1.isEmpty() && contours2.isEmpty() ? 1.0 : 0.0;
+        try {
+            if (c1.isEmpty() && c2.isEmpty()) return 1.0;
+            if (c1.isEmpty() || c2.isEmpty()) return 0.0;
+
+            List<MatOfPoint> top1 = c1.subList(0, Math.min(TOP_N, c1.size()));
+            List<MatOfPoint> top2 = c2.subList(0, Math.min(TOP_N, c2.size()));
+
+            double dir1 = directionalShapeScore(top1, top2);
+            double dir2 = directionalShapeScore(top2, top1);
+            double shapeScore = (dir1 + dir2) / 2.0;
+
+            // 轮廓数量差异惩罚
+            int n1 = c1.size(), n2 = c2.size();
+            int diff = Math.abs(n1 - n2);
+            int max = Math.max(n1, n2);
+            double countPenalty = 1.0 - (double) diff / (max + 1.0);
+
+            // 总面积比
+            double totalArea1 = totalArea(c1);
+            double totalArea2 = totalArea(c2);
+            double areaRatio = Math.min(totalArea1, totalArea2)
+                    / Math.max(totalArea1, totalArea2 + 1e-9);
+
+            // 几何混合：形状 65% + 面积比 20% + 数量惩罚 15%
+            return shapeScore * 0.65 + areaRatio * 0.20 + countPenalty * 0.15;
+        } finally {
+            releaseContours(c1);
+            releaseContours(c2);
         }
+    }
 
-        // 使用三种matchShapes方法的综合分数
-        double score1 = 0, score2 = 0, score3 = 0;
+    /**
+     * 对 src 中每个轮廓，去 dst 里找最匹配的，按面积加权平均匹配度
+     */
+    private double directionalShapeScore(List<MatOfPoint> src, List<MatOfPoint> dst) {
+        double scoreSum = 0;
+        double weightSum = 0;
+        for (MatOfPoint cs : src) {
+            double areaS = Imgproc.contourArea(cs);
+            if (areaS < 1e-6) continue;
 
-        // 只比较最大轮廓（整个字形的外轮廓），避免子轮廓排序错配
-        MatOfPoint c1 = contours1.get(0);
-        MatOfPoint c2 = contours2.get(0);
-
-        // I1 方法：对称Hu矩差
-        double d1 = Imgproc.matchShapes(c1, c2, Imgproc.CONTOURS_MATCH_I1, 0);
-        score1 = 1.0 / (1.0 + 0.25 * d1);
-
-        // I2 方法：Hu矩log差的绝对值之和
-        double d2 = Imgproc.matchShapes(c1, c2, Imgproc.CONTOURS_MATCH_I2, 0);
-        score2 = 1.0 / (1.0 + d2);
-
-        // I3 方法：最大差值
-        double d3 = Imgproc.matchShapes(c1, c2, Imgproc.CONTOURS_MATCH_I3, 0);
-        score3 = 1.0 / (1.0 + d3);
-
-        // 还考虑面积比（形状面积的相对差异）
-        double area1 = Imgproc.contourArea(c1);
-        double area2 = Imgproc.contourArea(c2);
-        double areaRatio = Math.min(area1, area2) / Math.max(area1, area2);
-
-        releaseContours(contours1);
-        releaseContours(contours2);
-
-        // 综合三种方法 + 面积比
-        double shapeScore = (score1 + score2 + score3) / 3.0;
-        return shapeScore * 0.8 + areaRatio * 0.2;
+            double bestScore = 0;
+            for (MatOfPoint cd : dst) {
+                double d1 = Imgproc.matchShapes(cs, cd, Imgproc.CONTOURS_MATCH_I1, 0);
+                double d2 = Imgproc.matchShapes(cs, cd, Imgproc.CONTOURS_MATCH_I2, 0);
+                // 用 I1 + I2 平均；不用 I3（仅取最大差，噪声大）
+                double d = (d1 + d2) / 2.0;
+                double s = 1.0 / (1.0 + 2.0 * d);
+                if (s > bestScore) bestScore = s;
+            }
+            scoreSum += bestScore * areaS;
+            weightSum += areaS;
+        }
+        return weightSum > 0 ? scoreSum / weightSum : 0.0;
     }
 
     private List<MatOfPoint> findContoursSorted(Mat binary) {
         List<MatOfPoint> contours = new ArrayList<>();
         Mat hierarchy = new Mat();
-        // 使用 RETR_EXTERNAL 只提取外轮廓
         Imgproc.findContours(binary.clone(), contours, hierarchy,
                 Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE);
         hierarchy.release();
 
         contours.sort(Comparator.comparingDouble(c -> -Imgproc.contourArea(c)));
 
-        // 过滤噪点
+        // 过滤明显噪点：面积 < 最大轮廓 1% 的丢掉
         if (!contours.isEmpty()) {
             double maxArea = Imgproc.contourArea(contours.get(0));
-            double threshold = maxArea * 0.01;
+            double threshold = Math.max(maxArea * 0.01, 4.0);
             contours.removeIf(c -> Imgproc.contourArea(c) < threshold);
         }
-
         return contours;
     }
 
+    private double totalArea(List<MatOfPoint> contours) {
+        double total = 0;
+        for (MatOfPoint c : contours) total += Imgproc.contourArea(c);
+        return total + 1e-9;
+    }
+
     private void releaseContours(List<MatOfPoint> contours) {
-        for (MatOfPoint c : contours) {
-            c.release();
-        }
+        for (MatOfPoint c : contours) c.release();
     }
 
     @Override

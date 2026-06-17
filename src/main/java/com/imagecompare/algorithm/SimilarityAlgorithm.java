@@ -1,24 +1,22 @@
 package com.imagecompare.algorithm;
 
-import org.opencv.core.Mat;
+import com.imagecompare.ImagePreprocessor.PreprocessResult;
 
 /**
  * 相似度算法接口
+ *
+ * 算法直接拿到 {@link PreprocessResult}，可按需访问 binary / grayscale / 原始宽高比等信息。
  */
 public interface SimilarityAlgorithm {
 
     String name();
 
     /**
-     * 比较两张预处理后的图像的相似度
-     *
-     * @param binary1 二值化图像1（前景=255, 背景=0）
-     * @param binary2 二值化图像2
-     * @param gray1   灰度图像1（白底黑字）
-     * @param gray2   灰度图像2
+     * 比较两张预处理结果的相似度
      * @return 相似度，范围 0.0 ~ 1.0
      */
-    double compare(Mat binary1, Mat binary2, Mat gray1, Mat gray2);
+    double compare(PreprocessResult a, PreprocessResult b);
 
+    /** 在几何均值融合中的权重（相对权重，归一化后使用） */
     double weight();
 }

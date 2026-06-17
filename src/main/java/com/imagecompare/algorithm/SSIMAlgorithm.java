@@ -1,17 +1,16 @@
 package com.imagecompare.algorithm;
 
+import com.imagecompare.ImagePreprocessor.PreprocessResult;
 import org.opencv.core.*;
 import org.opencv.imgproc.Imgproc;
 
 /**
- * SSIM（结构相似性）算法
- * 使用灰度图进行计算。
- * 对输入图像先做轻微高斯模糊，平滑微小的像素级差异，
- * 让SSIM更关注整体结构而非局部噪声。
+ * SSIM（结构相似性）算法 —— 仍保留实现，但默认不在 GlyphComparator 中注册
+ * （NCC 在字形场景下区分度比 SSIM 更高，已用 NCC 替代它）。
  */
 public class SSIMAlgorithm implements SimilarityAlgorithm {
 
-    private static final double WEIGHT = 0.4;
+    private static final double WEIGHT = 0.2;
 
     private static final double C1 = 6.5025;
     private static final double C2 = 58.5225;
@@ -24,12 +23,11 @@ public class SSIMAlgorithm implements SimilarityAlgorithm {
     }
 
     @Override
-    public double compare(Mat binary1, Mat binary2, Mat gray1, Mat gray2) {
-        // 先对灰度图做轻微模糊，平滑抗锯齿差异和微小位移
+    public double compare(PreprocessResult a, PreprocessResult b) {
         Mat blurred1 = new Mat();
         Mat blurred2 = new Mat();
-        Imgproc.GaussianBlur(gray1, blurred1, new Size(3, 3), 0.5);
-        Imgproc.GaussianBlur(gray2, blurred2, new Size(3, 3), 0.5);
+        Imgproc.GaussianBlur(a.grayscale, blurred1, new Size(3, 3), 0.5);
+        Imgproc.GaussianBlur(b.grayscale, blurred2, new Size(3, 3), 0.5);
 
         Mat i1 = new Mat();
         Mat i2 = new Mat();

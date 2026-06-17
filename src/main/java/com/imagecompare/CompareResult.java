@@ -1,52 +1,69 @@
 package com.imagecompare;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 /**
- * 字形比较结果
+ * 字形比较结果（多算法版）
  */
 public class CompareResult {
 
     /** 候选图片路径 */
     private final String candidatePath;
 
-    /** 网格直方图得分 (0~100) - 结构密度分布 */
-    private final double gridScore;
+    /** 各算法得分（算法名 -> 0~100），保持插入顺序方便打印 */
+    private final Map<String, Double> scores;
 
-    /** 轮廓匹配得分 (0~100) - Hu不变矩 */
-    private final double contourScore;
-
-    /** 距离容忍匹配得分 (0~100) - 位置容忍的像素比较 */
-    private final double distanceScore;
-
-    /** 综合评分 (0~100) */
+    /** 综合评分 0~100（由 {@code GlyphComparator} 用几何均值融合后传入） */
     private final double totalScore;
 
     /** 是否判定为相同字形 */
     private final boolean same;
 
-    /** 相同字形的阈值 */
-    public static final double SAME_THRESHOLD = 80.0;
+    /**
+     * 相同字形阈值。
+     * 新算法采用几何均值融合 + 每算法独立打分，分数比旧版分散：
+     *   - 同字形通常 75 ~ 95
+     *   - 不同字形通常 30 ~ 65
+     * 70 为新的合理切点。
+     */
+    public static final double SAME_THRESHOLD = 70.0;
 
-    public CompareResult(String candidatePath, double gridScore, double contourScore, double distanceScore) {
+    public CompareResult(String candidatePath, Map<String, Double> scores, double totalScore) {
         this.candidatePath = candidatePath;
-        this.gridScore = gridScore;
-        this.contourScore = contourScore;
-        this.distanceScore = distanceScore;
-        // 加权计算: 网格直方图 40% + 轮廓 30% + 距离容忍 30%
-        this.totalScore = gridScore * 0.4 + contourScore * 0.3 + distanceScore * 0.3;
-        this.same = this.totalScore >= SAME_THRESHOLD;
+        this.scores = new LinkedHashMap<>(scores);
+        this.totalScore = totalScore;
+        this.same = totalScore >= SAME_THRESHOLD;
     }
 
     public String getCandidatePath() { return candidatePath; }
-    public double getGridScore() { return gridScore; }
-    public double getContourScore() { return contourScore; }
-    public double getDistanceScore() { return distanceScore; }
     public double getTotalScore() { return totalScore; }
     public boolean isSame() { return same; }
 
+    /** 按算法名取得分 */
+    public double getScore(String algorithmName) {
+        return scores.getOrDefault(algorithmName, 0.0);
+    }
+
+    /** 所有算法得分（只读） */
+    public Map<String, Double> getScores() {
+        return Collections.unmodifiableMap(scores);
+    }
+
+    // === 旧版字段访问器（向后兼容） ===
+    public double getGridScore()     { return getScore("网格直方图"); }
+    public double getContourScore()  { return getScore("轮廓匹配"); }
+    public double getDistanceScore() { return getScore("距离容忍匹配"); }
+
     @Override
     public String toString() {
-        return String.format("%-25s  Grid: %5.1f%%  Contour: %5.1f%%  Distance: %5.1f%%  Total: %5.1f  %s",
-                candidatePath, gridScore, contourScore, distanceScore, totalScore,
-                same ? "SAME" : "DIFF");
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("%-25s ", candidatePath));
+        for (Map.Entry<String, Double> e : scores.entrySet()) {
+            sb.append(String.format(" %s:%5.1f%%", e.getKey(), e.getValue()));
+        }
+        sb.append(String.format("  Total:%5.1f  %s", totalScore, same ? "SAME" : "DIFF"));
+        return sb.toString();
     }
 }
