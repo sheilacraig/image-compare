@@ -7,6 +7,7 @@ import com.imagecompare.algorithm.SimilarityAlgorithm;
 import nu.pattern.OpenCV;
 
 import java.io.File;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -105,8 +106,11 @@ public class GlyphComparator {
 
         ref.release();
 
-        results.sort(Comparator.comparingDouble(CompareResult::getTotalScore).reversed());
-        return results;
+        return results.stream()
+                .filter(CompareResult::isSame)
+                .sorted(Comparator.comparingDouble(CompareResult::getTotalScore).reversed())
+                .limit(5)
+                .collect(Collectors.toList());
     }
 
     /**
@@ -154,6 +158,10 @@ public class GlyphComparator {
         int rank = 1;
         for (CompareResult r : results) {
             String fileName = Path.of(r.getCandidatePath()).getFileName().toString();
+            String verdict = r.isSame() ? "SAME" : "DIFF";
+            if (rank == 1) {
+                verdict += "  <-- BEST MATCH";
+            }
             System.out.printf("  %-4d  %-20s  %5.1f%%  %7.1f%%  %7.1f%%  %5.1f   %s%n",
                     rank++,
                     fileName.length() > 20 ? fileName.substring(0, 17) + "..." : fileName,
@@ -161,7 +169,7 @@ public class GlyphComparator {
                     r.getContourScore(),
                     r.getDistanceScore(),
                     r.getTotalScore(),
-                    r.isSame() ? "SAME" : "DIFF");
+                    verdict);
         }
         System.out.println("=============================================================================");
         System.out.printf("  Threshold: %.0f+ = SAME glyph%n", CompareResult.SAME_THRESHOLD);
@@ -203,22 +211,28 @@ public class GlyphComparator {
     }
 
     // ===========================
-    //  示例 main 方法
+    //  示例 main：在这里手动改下面三个参数即可运行
     // ===========================
-    public static void main(String[] args) {
-        GlyphComparator comparator = new GlyphComparator();
+    public static void main(String[] args) throws Exception {
+        System.setProperty("java.awt.headless", "true");
 
-        // --- 示例1: 1对1 比较 ---
-        CompareResult result = comparator.compare("images/1.png", "images/2.png");
-        GlyphComparator.printResult("images/1.png", result);
+        // === 在这里手动修改参数 ===
+        String character = "王";
+        String fontPath = "C:\\Users\\whh\\IdeaProjects\\glyph-compare\\src\\main\\resources\\fonts\\HYXinHuaSong.ttf";
+        String directory = "C:\\Users\\whh\\IdeaProjects\\glyph-compare\\src\\main\\resources\\images\\";
+        // =========================
 
-        // --- 示例2: 1对N 比较（传入文件列表）---
-        // List<CompareResult> results = comparator.compareAll("reference.png",
-        //     Arrays.asList("candidate1.png", "candidate2.png", "candidate3.png"));
-        // GlyphComparator.printResults("reference.png", results);
+        Path referenceImage = GlyphRenderer.renderToTempFile(character, fontPath);
+        try {
+            GlyphComparator comparator = new GlyphComparator();
+            List<CompareResult> results = comparator.compareDirectory(referenceImage.toString(), directory);
 
-        // --- 示例3: 1对目录 比较 ---
-        // List<CompareResult> results = comparator.compareDirectory("reference.png", "./candidates/");
-        // GlyphComparator.printResults("reference.png", results);
+            if (!results.isEmpty()) {
+                String refLabel = String.format("'%s' (rendered from %s)", character, fontPath);
+                printResults(refLabel, results);
+            }
+        } finally {
+            Files.deleteIfExists(referenceImage);
+        }
     }
 }
